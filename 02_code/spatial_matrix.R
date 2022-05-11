@@ -17,18 +17,36 @@ Nj <- matrix(data = c(1000, 1000, 1000, 1000,
              ncol = 4)
 
 # distance matrix
-d <- matrix(data = c(0, 1, 1, 1,
-                     1, 0, 1, 1,
-                     1, 1, 0, 1,
-                     1, 1, 1, 0),
+# A B
+# C D
+h <- sqrt(2^2 + 2^2)
+d <- matrix(data = c(0, 2, 2, h,
+                     2, 0, h, 2,
+                     2, h, 0, 2,
+                     h, 2, 2, 0),
            nrow = 4,
            ncol = 4)
 
-# calculate travel
+# mosquito mixing matrix
+mix_v <- diag(4)
+
+# calculate probability of travel to each destination
 totals <- (Nj ^ t) * (1 + (d / exp(log_p)))^(-a)
 
 # standardize so that each location sums to 1
 Pij <- totals / rowSums(totals)
+
+# add in frequency of travel
+f <- matrix(data = c(360/365, 5/365, 5/365, 5/365,
+                     5/365, 360/365, 5/365, 5/365,
+                     5/365, 5/365, 360/365, 5/365,
+                     5/365, 5/365, 5/365, 360/365),
+            nrow = 4,
+            ncol = 4)
+
+# multiply frequency of travel by probability of travel to each destination
+# diagonals should always be the majority of the row (staying within own population)
+Pij_f <- (Pij * f) / rowSums(Pij * f)
 
 # rebuild ICDMM
 # odin::odin_package(getwd())
@@ -51,17 +69,19 @@ mixing_M <- matrix(rep((1 / n), n * n),
                  ncol = n)
 
 # distance / population weighted
-mixing_W <- (Pij)
+mixing_W <- (Pij_f)
 
 # define function to run model
-mix_model <- function(EIR_vector, n, mixing){
+mix_model <- function(EIR_vector, n, mix_h, mix_v){
   out <- run_model_metapop(model = "odin_model_metapop",
                            het_brackets = 5,
                            age = age_vector,
                            init_EIR = EIR_vector,
                            init_ft = 0.4,
-                           mix_h = mixing,
-                           mix_v = ,
+                           mix_h = mix_h,
+                           mix_v = mix_v,
+                           # mix_h = ,
+                           # mix_v = ,
                            time = 5 * year,
                            # num_int = num_int,
                            # ITN_on = 1,
@@ -85,16 +105,23 @@ mix_model <- function(EIR_vector, n, mixing){
 
 }
 
+mixing_W <- matrix(c(0.98590416, 0.005582325, 0.005582325, 0.002931186,
+                     0.02924215, 0.951734188, 0.012292392, 0.006731273,
+                     0.02924215, 0.012292392, 0.951734188, 0.006731273,
+                     0.1, 0.05, 0.05, 0.8),
+                   nrow = 4,
+                   ncol = 4)
+
 # run three scenarios
-A <- mix_model(EIR_vector, n, mixing_I) + labs(title = 'Isolated')
-B <- mix_model(EIR_vector, n, mixing_M) + labs(title = 'Perfectly mixed')
-C <- mix_model(EIR_vector, n, mixing_W) + labs(title = 'Weighted')
+A <- mix_model(EIR_vector, n, mixing_I, mix_v) + labs(title = 'Isolated')
+B <- mix_model(EIR_vector, n, mixing_M, mixing_M) + labs(title = 'Perfectly mixed')
+C <- mix_model(EIR_vector, n, mixing_W, mixing_W) + labs(title = 'Weighted')
 
 # plot
 A + B + C + plot_layout(guides = "collect", nrow=1) + plot_annotation(tag_levels = 'A')
 
 # save
-ggsave()
+ggsave('./')
 
 # to add:
 lapply(EIR_vector, function(x){paste(':',x)})
