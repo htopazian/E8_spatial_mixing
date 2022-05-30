@@ -97,7 +97,17 @@ pop <- raster::extract(SG_rast, Senegambia, exact = T)
 pop <- unlist(lapply(pop, function(x) if (!is.null(x)) sum(x, na.rm = TRUE) else NA )) %>%
   as_tibble() %>% rename(wpop_pop = value)
 
-saveRDS(pop, './03_output/Senegambia_population.rds') # save
+
+# weighted polygon centroids
+# convert polygons to raster layer
+z <- rasterize(Senegambia, SG_rast)
+# compute weighted x and y coordinates within each rasterized region
+xx <- zonal(init(SG_rast, v = "x") * SG_rast, z) / zonal(SG_rast, z) # default = mean
+yy <- zonal(init(SG_rast, v = "y") * SG_rast, z) / zonal(SG_rast, z) # default = mean
+
+# combine results in a matrix
+weighted_centroids <- tibble(xx[, 2], yy[, 2])
+head(weighted_centroids)
 
 
 # change to dataframe to use with ggplot()
@@ -123,54 +133,7 @@ pfpr <- Senegambia %>% left_join(pfpr, by = c('ID_0' = 'ISO', 'NAME_1' = 'Name_1
 
 # calibrate pfprs to EIRs in odin
 # https://github.com/mrc-ide/cali/blob/main/R/calibrate.R
-calibrate <- function(target, target_tt, summary_function, tolerance, interval = c(0.01, 2000) / 365, ...){
-  stats::uniroot(objective,
-                 target = target,
-                 target_tt = target_tt,
-                 summary_function = summary_function,
-                 tolerance = tolerance,
-                 interval = interval,
-                 ...)
-}
-
-objective <- function(x, target, target_tt, summary_function, tolerance){
-  message("Trying EIR: ", signif(x, 3))
-
-  raw_output <- ICDMM::run_model(model = "odin_model",
-                                 init_EIR = x,
-                                 init_ft = 0.4,
-                                 time = target_tt)
-
-  raw_output <- as_tibble(raw_output)
-
-  target_variable <- raw_output$prev2to10
-  difference <- (target_variable[target_tt] - target)
-  message("Current difference: ", paste(signif(difference, 3), collapse = " "))
-  # Adjust for specified tolerance
-  difference[abs(difference) < tolerance] <- 0
-  difference <- sum(difference)
-  return(difference)
-}
-
-summary_pfpr_2_10 <- function(x){
-  prev_2_10 <- x$prev2to10
-  return(prev_2_10)
-}
-
-
-PR_EIR <- function(target, target_tt){
-  set.seed(123)
-  out <- calibrate(target = target,
-                   target_tt = target_tt,
-                   summary_function = summary_pfpr_2_10,
-                   tolerance = 0.02,
-                   interval = c(.0001, 300))
-
-  root <- as_tibble(out) %>% dplyr::select(root)
-
-  root
-
-}
+source('./02_code/calibrate.R')
 
 # run over prevalence values for each admin1
 EIR <- map2_dfr(pfpr$PfPR_rmean, rep(365, nrow(pfpr)), PR_EIR)
@@ -180,6 +143,24 @@ EIR <- map2_dfr(pfpr$PfPR_rmean, rep(365, nrow(pfpr)), PR_EIR)
 pfpr_eir <- cbind(pfpr, EIR)
 
 saveRDS(pfpr_eir, './03_output/Senegambia_pfpr_eir.rds') # save
+# pfpr_eir <- readRDS('./03_output/Senegambia_pfpr_eir.rds')
+
+
+# Centroids --------------------------------------------------------------------
+
+# find centroids in E8 admin1s
+centroids <- sf::st_centroid(Senegambia)
+saveRDS(centroids, './03_output/Senegambia_centroids.rds')
+
+weighted_centroids <- st_as_sf(weighted_centroids, coords = c('xx[, 2]', 'yy[, 2]'))
+st_crs(weighted_centroids) <- st_crs(centroids)
+
+saveRDS(weighted_centroids, './03_output/Senegambia_weighted_centroids.rds')
+
+centroids_combo <- rbind(
+  centroids %>% dplyr::select(geometry) %>% mutate(type = 'geographic centroids'),
+  weighted_centroids %>% mutate(type = 'weighted centroids')
+)
 
 
 # save master dataset of variables
@@ -187,20 +168,24 @@ master <- cbind(pfpr_eir, pop) %>%
   rename(EIR = root) %>%
   dplyr::select(ID_0, COUNTRY, NAME_1, VARNAME_1, map_pop, wpop_pop,
                 PfPR_rmean, EIR, geometry)
+master <- cbind(master,
+                weighted_centroids %>% rename(w_cent_geometry = geometry),
+                centroids %>% dplyr::select(geometry) %>% rename(cent_geometry = geometry))
 
+# save master dataframe
 saveRDS(master, './03_output/Senegambia_master.rds') # save
 
 
 # E8 map -----------------------------------------------------------------------
 # find centroids in E8 admin1s
-centroids <- sf::st_centroid(E8)
+centroids_E8 <- sf::st_centroid(E8)
 
 # plot
 ggplot() +
   geom_sf(data = SSA, fill = "cornsilk2", color = "cornsilk3") +
   geom_sf(data = SADC, fill = "lightgreen", color = "cornsilk3") +
   geom_sf(data = E8, fill = "darkgreen") +
-  geom_sf(data = centroids, color = 'red', shape = 4, size = 2) +
+  geom_sf(data = centroids_E8, color = 'red', shape = 4, size = 2) +
   # geom_sf(data=E8, fill=NA, color="tan4", size=0.75) +
   theme_bw(base_size = 14) +
   scale_color_distiller(palette = 'Spectral') +
@@ -218,9 +203,6 @@ ggsave('./03_output/E8_map.pdf', width = 6, height = 6)
 
 
 # Senegambia map ---------------------------------------------------------------
-# find centroids in E8 admin1s
-centroids <- sf::st_centroid(Senegambia)
-saveRDS(centroids, './03_output/Senegambia_centroids.rds')
 
 # plot
 ggplot() +
@@ -228,12 +210,13 @@ ggplot() +
   geom_sf(data = Senegambia[Senegambia$ID_0 == 'GMB',], fill = "#72B000", color = "cornsilk3") +
   geom_sf(data = Senegambia[Senegambia$ID_0 == 'SEN',], fill = "#72B000", color = "cornsilk3") +
   geom_raster(data = SG_rast, aes(x = x, y = y, alpha = layer), fill = "darkgreen", show.legend = F) +
-  geom_sf(data = centroids, color = 'red', shape = 4, size = 2) +
+  geom_sf(data = centroids_combo, aes(color = type), shape = 4, size = 2) +
   theme_bw(base_size = 14) +
   scale_alpha_continuous(range = c(0, 300), breaks = c(0, 0.1, 0.2, 0.5, 1, 300)) +
+  scale_color_manual(values = c('red', 'blue')) +
   scale_x_continuous(limits = c(-17.8, -11)) +
   scale_y_continuous(limits = c(12, 17)) +
-  labs(x = '', y = '') +
+  labs(x = '', y = '', color = '') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),
@@ -242,5 +225,3 @@ ggplot() +
         panel.background = element_rect(fill = "#daeff8", color = NA))
 
 ggsave('./03_output/Senegambia.pdf', width = 6, height = 6)
-
-

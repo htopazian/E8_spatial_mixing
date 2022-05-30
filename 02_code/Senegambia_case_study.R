@@ -95,7 +95,7 @@ Senegambia_neighbors <- countries %>%
 pfpr_diff <- output %>% filter(year == 10 & name %in% c('Isolated')) %>%
   group_by(EIR, name) %>%
   summarize(prev2to10 = mean(prev2to10)) %>%
-  select(-name) %>%
+  dplyr::select(-name) %>%
   mutate(EIR = round(as.numeric(EIR),6))
 
 plot_data <- master %>%
@@ -130,7 +130,7 @@ pfpr_diff <- output %>% filter(year == 10 & name %in% c('Isolated', 'Weighted'))
   arrange(EIR, name) %>%
   mutate(diff = prev2to10 - lag(prev2to10)) %>%
   filter(!is.na(diff)) %>%
-  select(-name) %>%
+  dplyr::select(-name) %>%
   mutate(EIR = round(as.numeric(EIR),6))
 
 plot_data <- master %>%
@@ -143,11 +143,11 @@ ggplot() +
   geom_sf(data = Senegambia[Senegambia$ID_0 == 'SEN',], fill = "#72B000", color = "cornsilk3") +
   geom_sf(data = plot_data, aes(fill = diff)) +
   theme_bw(base_size = 14) +
-  scale_alpha_continuous(range = c(0, 300), breaks = c(0, 0.1, 0.2, 0.5, 1, 300)) +
-  scale_fill_distiller(palette = "RdBu") +
+  # https://colorbrewer2.org/#type=diverging&scheme=RdBu&n=3
+  scale_fill_gradient2(low = '#67a9cf', mid = "white", high = '#ef8a62', midpoint = 0) +
   scale_x_continuous(limits = c(-17.8, -11)) +
   scale_y_continuous(limits = c(12, 17)) +
-  labs(x = '', y = '', fill = 'PfPR difference between \nisolated and weighted mixing') +
+  labs(x = '', y = '', fill = 'PfPR after \nweighted mixing') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),
@@ -156,5 +156,6 @@ ggplot() +
         panel.background = element_rect(fill = "#daeff8", color = NA))
 
 ggsave('./03_output/Senegambia_mixing_W.pdf', width = 6, height = 6)
+
 
 
