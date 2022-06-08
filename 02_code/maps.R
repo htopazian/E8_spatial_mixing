@@ -225,3 +225,80 @@ ggplot() +
         panel.background = element_rect(fill = "#daeff8", color = NA))
 
 ggsave('./03_output/Senegambia.pdf', width = 6, height = 6)
+
+
+
+# Trip duration ----------------------------------------------------------------
+# https://malariajournal.biomedcentral.com/articles/10.1186/s12936-016-1252-3#MOESM2
+# 12936_2016_1252_MOESM2_ESM.xlsx Additional file 2, Marshall et al. 2016
+library(readxl)
+library(splines)
+
+# function to import Marshall et a. 2016 Trips data
+import_xlsx <- function(sheet){
+
+  read_excel('./01_data/Marshall_2016_additional_file_2.xlsx', sheet = sheet) %>%
+    mutate(Age = ifelse(Age == 'NA', NA, Age),
+           Age = is.numeric(Age)) %>%
+    dplyr::select(TripID, PersonID, TripType, OrigCountry,
+                  DestCountry, Distance, Duration, Purpose, Gender, Age)
+
+}
+
+# import and merge
+dat <- map_dfr(.x = c('ML Trips', 'BF Trips', 'ZM Trips', 'TZ Trips'),
+               .f = import_xlsx)
+
+# remove NAs (-1s? a little unclear)
+dat <- dat %>% mutate(Duration = ifelse(Duration < 0, NA, Duration))
+summary(dat$Duration)
+
+# plot by country
+ggplot(data = dat,
+       aes(x = Distance, y = Duration)) +
+  geom_point(alpha = 0.1,  size = 0.5, color = 'darkgrey') +
+  geom_smooth(method = 'loess', aes(color = OrigCountry, group = OrigCountry)) +
+  geom_smooth(method = 'loess', color = 'black') +
+  labs(x = 'Distance (km)',
+       y = 'Duration (days)',
+       color = 'Origin Country') +
+  scale_y_continuous(limits = c(0, 365)) +
+  theme_classic()
+
+ggsave('./03_output/Trip_duration.pdf', width = 6, height = 4)
+
+
+# fit a model to duration data
+# linear
+model <- glm(Duration ~ Distance, family = gaussian(link = 'identity'), data = dat)
+model$coefficients; model$aic
+
+# cubic splines
+model <- glm(Duration ~ splines::ns(Distance, 2), family = gaussian(link = 'identity'), data = dat)
+model$coefficients; model$aic
+
+# cubic splines
+model <- glm(Duration ~ splines::ns(Distance, 6), family = gaussian(link = 'identity'), data = dat)
+model$coefficients; model$aic
+
+saveRDS(model, file = './03_output/dist_duration_sk6_model.rds')
+
+# plot by model fit
+ggplot(data = dat,
+       aes(x = Distance, y = Duration)) +
+  geom_point(alpha = 0.1,  size = 0.5, color = 'darkgrey') +
+  geom_smooth(formula = y ~ x, method = 'glm', aes(color = 'linear')) +
+  geom_smooth(formula = y ~ ns(x, 2), method = 'glm', aes(color = 'spline 2k')) +
+  geom_smooth(formula = y ~ ns(x, 6), method = 'glm', aes(color = 'spline 6k')) +
+  geom_smooth(method = 'loess', aes(color = 'loess'), size = .5) +
+  scale_y_continuous(limits = c(0, 50)) +
+  scale_color_discrete(type = c('#00BFC4', 'black', '#7CAE00', '#F8766D')) +
+  labs(x = 'Distance (km)',
+       y = 'Duration (days)',
+       color = 'Fit') +
+  theme_classic()
+
+ggsave('./03_output/Trip_duration_fit.pdf', width = 6, height = 4)
+
+
+
