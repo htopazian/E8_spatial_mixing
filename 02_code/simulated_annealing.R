@@ -22,16 +22,17 @@ sources <- c('./functions.R')
 
 ctx <- context::context_save(path = "M:/Hillary/contexts",
                              sources = sources,
-                             packages = c("dplyr", "odin", "ICDMM", "dde", "sf", "tidyr"))
+                             packages = c("dplyr", "odin", "ICDMM", "dde", "tidyr", "nloptr"))
 
 share <- didehpc::path_mapping('malaria', "M:", "//fi--didef3.dide.ic.ac.uk/malaria", "M:")
 
 # template choices: "GeneralNodes", "12Core", "16Core", "12and16Core", "20Core", "24Core" or "32Core"
 config <- didehpc::didehpc_config(shares = share,
                                   use_rrq = FALSE,
-                                  cores = 1,
+                                  cores = 10,
                                   cluster = "fi--didemrchnb",
-                                  template = "32Core",
+                                  template = "GeneralNodes",
+                                  wholenode = TRUE,
                                   parallel = FALSE)
 
 # obj <- didehpc::queue_didehpc(ctx, config = config, provision = "upgrade")
@@ -40,80 +41,53 @@ obj <- didehpc::queue_didehpc(ctx, config = config)
 
 # Set up your job --------------------------------------------------------------
 
-# define weighted matrix
-data <- readRDS('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/Senegambia_master.rds')
-population <- data$wpop_pop
-EIR <- data$EIR
+master <- readRDS('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/Senegambia_master.rds')
 
-# define parameters [Marshall et al. 2018]
-a <- 1.91
-log_p <- 4.29
-t <- 1.22
 
-# destination population matrix
-Nj <- t(matrix(data = c(rep(population, nrow(data))),
-               nrow = nrow(data),
-               ncol = nrow(data)))
 
-# distance matrix
-d <- st_distance(data$w_cent_geometry, data$w_cent_geometry) / 1000
+# nloptr COBYLA ----------------------------------------------------------------
+# list of algorithms: https://nlopt.readthedocs.io/en/latest/NLopt_Algorithms/
+library(nloptr)
+source('M:/Hillary/E8_spatial_mixing/functions.R')
 
-clean_units <- function(x){
-  attr(x, "units") <- NULL
-  class(x) <- setdiff(class(x), "units")
-  x
-}
+# test function - output will be in: 'M:/Hillary/E8_spatial_mixing/optimization_output'
+run_nloptr(budget = 500,
+           EIR_vector = c(1, 5),
+           mixtype = 'I',
+           population = c(500, 600))
 
-d <- clean_units(d)
-
-# calculate probability of travel to each destination
-totals <- (Nj ^ t) * (1 + (d / exp(log_p)))^(-a)
-
-# standardize so that each location sums to 1
-Pij <- totals / rowSums(totals)
-
-# add in frequency of travel
-f <- matrix(diag(c(rep(360/365, 20))), ncol = 20)
-I <- diag(1, ncol = 20, nrow = 20)
-f[I == 0] <- 5/365
-
-# multiply frequency of travel by probability of travel to each destination
-# diagonals should always be the majority of the row (staying within own population)
-Pij_f <- (Pij * f) / rowSums(Pij * f)
-
-# distance / population weighted
-mixing_W <- (Pij_f)
-
-# save
-saveRDS(mixing_W, 'M:/Hillary/E8_spatial_mixing/mixing_W.rds')
+run_nloptr(combos[1, 1], combos[1, 2], combos[1, 3], combos[1, 4])
 
 
 # define combinations
-mixing <- c('I', 'W')
+budget <- c(0.001 * sum(master$wpop_pop), seq(100000, sum(master$wpop_pop), 100000), sum(master$wpop_pop))
+EIR_vector <- list(master$EIR)
+mixtype <- c('I', 'W')
+population <- list(master$wpop_pop)
 
-master <- readRDS('./03_output/Senegambia_master.rds')
-EIR <- master$EIR
+combos <- crossing(budget, EIR_vector, mixtype, population)
 
-itn_cov <- seq(0, 1, 0.1)
+# submit jobs
+obj <- didehpc::queue_didehpc(ctx, config = config)
 
-test <- crossing(EIR, itn_cov)
-test
-
-
-
-t <- obj$enqueue(odin_mixing(master))
+t <- obj$enqueue_bulk(combos, run_nloptr)
 t$status()
 
 
 
 
 
+# testing simulated annealing --------------------------------------------------
+library(GenSA)
+source('M:/Hillary/E8_spatial_mixing/functions.R')
 
+# model <- readRDS(model, file = './03_output/dist_duration_sk6_model.rds')
+#
+# netz <- readRDS("M:/Eradication/rds/netz_median_use_rate.rds")
+# conversion <- readRDS("M:/eradication/rds/conversion_usage_pcnets_median_use_rate.rds") %>% as.data.frame() %>%
+#   filter(usage<=ITNuse/100)
+# conversion$pc_nets_annual <- round(conversion$pc_nets_annual,3)
 
-
-# testing COBYLA ---------------------------------------------------------------
-# list of algorithms: https://nlopt.readthedocs.io/en/latest/NLopt_Algorithms/
-library(nloptr)
 
 # objective function:
 eval_f0 <- function(itn_cov, budget, EIR_vector, mix, population){
@@ -155,37 +129,28 @@ eval_f0 <- function(itn_cov, budget, EIR_vector, mix, population){
     cbind(population) %>%
     mutate(cases = prev2to10 * population)
 
+  # set a high penalty when the constraint is not respected
+  penalty <- 10
+
   # minimize overall number of cases 2-10 year olds
-  return(sum(model$cases))
+  return(sum(model$cases) + penalty * max(sum(itn_cov * population) - budget, 0))
 
   # use incidence instead of prev
 
 }
 
-# inequality constraints:
-eval_g0 <- function(itn_cov, budget, EIR_vector, mix, population){
 
-  # spending <= budget
-  # spending - budget <= 0
-  constraint <- sum(itn_cov * population) - budget
-
-  return(constraint)
-
-}
-
-# optimization function:
+# set function to run SA process
 solver <- function(budget, EIR_vector, mix, population){
 
-  output <- nloptr(
-    x0 = c(0.5, 0.5),                # initial values
-    eval_f = eval_f0,                # gradient of function
-    # eval_g = eval_g0,              # constraint function
-    eval_g_ineq = eval_g0,           # inequality constraint function
-    # eval_jac_g_ineq = eval_jac_g0, # jacobian of inequality constraint - (derivative of objective function)
-    lb = rep(0, length(EIR_vector)), # lower boundary
-    ub = rep(1, length(EIR_vector)), # upper boundary
-    opts = list("algorithm" = "NLOPT_LN_COBYLA",
-                "xtol_rel" = 0.01), # define algorithm
+  output <- GenSA(
+    par = c(0.5, 0.5),                  # initial values
+    fn = eval_f0,                       # function
+    lower = rep(0.001, length(EIR_vector)), # lower boundary
+    upper = rep(1, length(EIR_vector)), # upper boundary
+    control = list(
+      temperature = 10
+      ), # temperature
 
     # defining other function inputs
     budget = budget,
@@ -194,13 +159,14 @@ solver <- function(budget, EIR_vector, mix, population){
     population = population
   )
 
-  return(output)
+  result <- tibble(B = budget, eirs = EIR_vector, itn = output$par, b = output$par * population, population) # result
 
-  # local or global, eval_f0 function - plot this
+  return(result)
+
 
 }
 
-# run
+# run function
 EIR_vector <- c(1, 5)
 population <- c(1000, 700)
 
@@ -208,20 +174,13 @@ mix <- matrix(data = c(0.9, 0.1, 0.1, 0.9),
               nrow = 2,
               ncol = 2)
 
-budget <- 200
+budget <- 300
 
 set.seed(123)
-output <- solver(budget, EIR_vector, mix, population)
-output$solution
+solver(budget, EIR_vector, mix, population)
+
 
 # check constraint
-sum(output$solution * population)
+sum(output$b)
 
-
-
-# testing simulated annealing --------------------------------------------------
-
-model <- readRDS(model, file = './03_output/dist_duration_sk6_model.rds')
-
-
-
+# nb.stop.improvement Integer

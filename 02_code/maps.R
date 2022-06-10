@@ -302,3 +302,69 @@ ggsave('./03_output/Trip_duration_fit.pdf', width = 6, height = 4)
 
 
 
+
+# Weighted matrix --------------------------------------------------------------
+data <- readRDS('./03_output/Senegambia_master.rds')
+model <- readRDS('./03_output/dist_duration_sk6_model.rds')
+
+population <- data$wpop_pop
+EIR <- data$EIR
+
+# define parameters [Marshall et al. 2018]
+a <- 1.91
+log_p <- 4.29
+t <- 1.22
+
+# destination population matrix
+Nj <- t(matrix(data = c(rep(population, nrow(data))),
+               nrow = nrow(data),
+               ncol = nrow(data)))
+
+# distance matrix - in km
+d <- st_distance(data$w_cent_geometry, data$w_cent_geometry) / 1000
+
+clean_units <- function(x){
+  attr(x, "units") <- NULL
+  class(x) <- setdiff(class(x), "units")
+  x
+}
+
+d <- clean_units(d)
+
+# calculate probability of travel to each destination
+totals <- (Nj ^ t) * (1 + (d / exp(log_p)))^(-a)
+
+# standardize so that each location sums to 1
+Pij <- totals / rowSums(totals)
+
+
+
+# add in duration of travel
+f <- as_tibble(d) %>% # convert distance matrix to long tibble
+  pivot_longer(cols = everything(), values_to = 'Distance', names_to = NULL)
+
+pred <- predict(model, newdata = f) # predict duration of travel with Marshall et al. model fits
+
+pred_dat <- f %>% cbind(pred) %>% # bind predications to data
+  mutate(pred = ifelse(Distance == 0, NA, pred)) # remove pred for admin1 with itself
+
+summary(pred_dat$pred) # examine predictions
+
+pred_mat <- matrix(pred_dat$pred, ncol = 20, nrow = 20) # transform predictions back into matrix
+pred_mat <- Pij * pred_mat # multiply duration of travel by probability of travel
+
+# replace admin1 with itself relationships with remainder of duration time left to travel
+rsum <- 365 - rowSums(pred_mat, na.rm = T)
+
+I <- diag(1, ncol = 20, nrow = 20)
+pred_mat[I == 1] <- rsum
+
+# multiply frequency of travel by probability of travel to each destination
+# diagonals should always be the majority of the row (staying within own population)
+Pij_f <- pred_mat / rowSums(pred_mat)
+
+saveRDS(Pij_f, 'M:/Hillary/E8_spatial_mixing/mixing_W.rds')
+
+
+
+
