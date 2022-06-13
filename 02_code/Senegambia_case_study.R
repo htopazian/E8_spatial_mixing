@@ -31,7 +31,7 @@ config <- didehpc::didehpc_config(shares = share,
                                   use_rrq = FALSE,
                                   cores = 1,
                                   cluster = "fi--didemrchnb",
-                                  template = "32Core",
+                                  template = "GeneralNodes",
                                   parallel = FALSE)
 
 # obj <- didehpc::queue_didehpc(ctx, config = config, provision = "upgrade")
@@ -134,7 +134,7 @@ pfpr_diff <- output %>% filter(year == 10 & name %in% c('Isolated', 'Weighted'))
   mutate(EIR = round(as.numeric(EIR),6))
 
 plot_data <- master %>%
-  mutate(EIR = round(as.numeric(EIR),6)) %>%
+  mutate(EIR = round(as.numeric(EIR), 6)) %>%
   left_join(pfpr_diff, by = 'EIR')
 
 ggplot() +
@@ -147,7 +147,7 @@ ggplot() +
   scale_fill_gradient2(low = '#67a9cf', mid = "white", high = '#ef8a62', midpoint = 0) +
   scale_x_continuous(limits = c(-17.8, -11)) +
   scale_y_continuous(limits = c(12, 17)) +
-  labs(x = '', y = '', fill = 'PfPR after \nweighted mixing') +
+  labs(x = '', y = '', fill = 'change in PfPR after \nweighted mixing') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),

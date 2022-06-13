@@ -29,10 +29,10 @@ share <- didehpc::path_mapping('malaria', "M:", "//fi--didef3.dide.ic.ac.uk/mala
 # template choices: "GeneralNodes", "12Core", "16Core", "12and16Core", "20Core", "24Core" or "32Core"
 config <- didehpc::didehpc_config(shares = share,
                                   use_rrq = FALSE,
-                                  cores = 10,
+                                  cores = 8,
                                   cluster = "fi--didemrchnb",
-                                  template = "GeneralNodes",
-                                  wholenode = TRUE,
+                                  template = "24Core",
+                                  # wholenode = TRUE,
                                   parallel = FALSE)
 
 # obj <- didehpc::queue_didehpc(ctx, config = config, provision = "upgrade")
@@ -46,17 +46,18 @@ master <- readRDS('C:/Users/htopazia/OneDrive - Imperial College London/Github/E
 
 
 # nloptr COBYLA ----------------------------------------------------------------
+# < set up HPC ----
 # list of algorithms: https://nlopt.readthedocs.io/en/latest/NLopt_Algorithms/
 library(nloptr)
 source('M:/Hillary/E8_spatial_mixing/functions.R')
 
 # test function - output will be in: 'M:/Hillary/E8_spatial_mixing/optimization_output'
-run_nloptr(budget = 500,
-           EIR_vector = c(1, 5),
-           mixtype = 'I',
-           population = c(500, 600))
-
-run_nloptr(combos[1, 1], combos[1, 2], combos[1, 3], combos[1, 4])
+# run_nloptr(budget = 500,
+#            EIR_vector = c(1, 5),
+#            mixtype = 'I',
+#            population = c(500, 600))
+#
+# run_nloptr(combos[1, 1], combos[1, 2], combos[1, 3], combos[1, 4])
 
 
 # define combinations
@@ -72,6 +73,88 @@ obj <- didehpc::queue_didehpc(ctx, config = config)
 
 t <- obj$enqueue_bulk(combos, run_nloptr)
 t$status()
+
+
+# < process runs ----
+library(data.table)
+
+# list all files run by HPC
+files <- list.files(path = "M:/Hillary/E8_spatial_mixing/optimization_output/", pattern = "nloptr_*", full.names = TRUE)
+
+# read in files and combine
+dat_list <- lapply(files, function (x) readRDS(x))
+dat <- rbindlist(dat_list, fill = TRUE, idcol="file")
+
+# see if constraint is met
+dat %>% group_by(B) %>% summarize(b = sum(b)) %>% print(n = 120)
+
+dat2 <- dat %>%
+  mutate(b = ifelse(B == 0, 0, b),
+         itn = ifelse(B == 0, 0, itn)) %>%
+  group_by(B) %>% mutate(t = sum(b)) %>%
+  filter(t <= B)
+
+
+
+dat2 <- dat2 %>% left_join(master %>% dplyr::select(COUNTRY, PfPR_rmean, EIR), by = c('eirs' = 'EIR'))
+
+
+# plot
+ggplot(data = dat2) +
+  geom_line(aes(x = B, y = itn, color = eirs, group = eirs), size = 1, alpha = 0.5) +
+  labs(x = '$ USD', y = 'ITN usage', color = 'EIR',
+       caption = '1 net = $1 USD, linear fit') +
+  # facet_wrap(~COUNTRY, nrow = 1) +
+  theme_classic()
+
+ggsave('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/nloptr_EIR.pdf', height = 4, width = 6)
+
+
+dat3 <- dat2 %>% filter(B == 1000000) %>%
+  mutate(start = B / sum(population)) %>%
+  mutate(diff = itn - start)
+
+head(dat3)
+
+summary(dat3$itn); summary(dat3$diff)
+
+
+
+countries <- readRDS('./03_output/countries.rds')
+
+
+Senegambia <- c('SEN','GMB')
+
+Senegambia_neighbors <- c('GNB','GIN','MRT','MLI')
+
+Senegambia <- countries %>%
+  filter(ID_0 %in% Senegambia)
+
+Senegambia_neighbors <- countries %>%
+  filter(ID_0 %in% Senegambia_neighbors)
+
+ggplot() +
+  geom_sf(data = Senegambia_neighbors, fill = "cornsilk2", color = "cornsilk3") +
+  geom_sf(data = Senegambia[Senegambia$ID_0 == 'GMB',], fill = "#72B000", color = "cornsilk3") +
+  geom_sf(data = Senegambia[Senegambia$ID_0 == 'SEN',], fill = "#72B000", color = "cornsilk3") +
+  geom_sf(data = st_as_sf(dat3), aes(fill = diff)) +
+  theme_bw(base_size = 14) +
+  # https://colorbrewer2.org/#type=diverging&scheme=RdBu&n=3
+  scale_fill_gradient2(low = '#67a9cf', mid = "white", high = '#ef8a62', midpoint = 0) +
+  scale_x_continuous(limits = c(-17.8, -11)) +
+  scale_y_continuous(limits = c(12, 17)) +
+  labs(x = '', y = '', fill = 'change in ITN use \nafter optimization',
+       caption = '1 M USD, weighted mixing, vs. a constant usage of 0.462') +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.background = element_rect(fill = "#daeff8", color = NA),
+        plot.caption.position = "panel",
+        plot.caption = element_text(hjust = 0))
+
+ggsave('./03_output/Senegambia_optimization_diff.pdf', width = 6, height = 6)
 
 
 
@@ -144,12 +227,16 @@ eval_f0 <- function(itn_cov, budget, EIR_vector, mix, population){
 solver <- function(budget, EIR_vector, mix, population){
 
   output <- GenSA(
-    par = c(0.5, 0.5),                  # initial values
+    par = budget * (population / sum(population)) / population, # initial values
     fn = eval_f0,                       # function
     lower = rep(0.001, length(EIR_vector)), # lower boundary
     upper = rep(1, length(EIR_vector)), # upper boundary
     control = list(
-      temperature = 10
+      temperature = .1,
+      simple.function = TRUE,
+      acceptance.param = 2,
+      nb.stop.improvement = 2
+      # max.call = 2
       ), # temperature
 
     # defining other function inputs
@@ -184,3 +271,36 @@ solver(budget, EIR_vector, mix, population)
 sum(output$b)
 
 # nb.stop.improvement Integer
+
+# NETZ ----
+library(netz)
+
+devtools::install_github('https://github.com/mrc-ide/netz')
+
+# specify the coutry iso codes and target usages
+input <- expand_grid(iso3 = c("SEN", "GMB"),
+                     usage = seq(0, 1, 0.01))
+
+# link these to half life, usage rates and distribution frequencies
+input <- input %>%
+  left_join(get_halflife_data(), by = "iso3") %>%
+  left_join(get_usage_rate_data(), by = "iso3") %>%
+  mutate(distribution_freq = 365 * 3)
+
+# follow the conversion chain to move between different bed net measures
+output <- input %>%
+  mutate(access = usage_to_access(usage, usage_rate),
+         npc = access_to_crop(access, type = "loess_extrapolate"),
+         anpcd = crop_to_distribution(npc, distribution_freq = distribution_freq, net_loss_function = net_loss_map, half_life = half_life))
+
+# Plot curve
+ggplot() +
+  geom_line(data = output, aes(x = anpcd, y = usage, color = iso3), size = 1.5) +
+  xlim(0, 1) +
+  ylim(0, 1) +
+  labs(x = "Annual nets distributed per capita", y = "Usage", colour = "") +
+  theme_classic()
+
+
+ggsave('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/netz.pdf', height = 4, width = 4)
+
