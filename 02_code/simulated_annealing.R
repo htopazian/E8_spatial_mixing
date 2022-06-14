@@ -79,7 +79,7 @@ t$status()
 library(data.table)
 
 # list all files run by HPC
-files <- list.files(path = "M:/Hillary/E8_spatial_mixing/optimization_output/", pattern = "nloptr_*", full.names = TRUE)
+files <- list.files(path = "M:/Hillary/E8_spatial_mixing/optimization_output/", pattern = "*_W", full.names = TRUE)
 
 # read in files and combine
 dat_list <- lapply(files, function (x) readRDS(x))
@@ -88,7 +88,11 @@ dat <- rbindlist(dat_list, fill = TRUE, idcol="file")
 # see if constraint is met
 dat %>% group_by(B) %>% summarize(b = sum(b)) %>% print(n = 120)
 
-dat2 <- dat %>%
+# add point 0,0
+p0 <- readRDS('M:/Hillary/E8_spatial_mixing/optimization_output/nloptr_0.rds') %>%
+  rename(eir = eirs)
+
+dat2 <- dat %>% full_join(p0) %>%
   mutate(b = ifelse(B == 0, 0, b),
          itn = ifelse(B == 0, 0, itn)) %>%
   group_by(B) %>% mutate(t = sum(b)) %>%
@@ -96,12 +100,12 @@ dat2 <- dat %>%
 
 
 
-dat2 <- dat2 %>% left_join(master %>% dplyr::select(COUNTRY, PfPR_rmean, EIR), by = c('eirs' = 'EIR'))
+dat2 <- dat2 %>% left_join(master %>% dplyr::select(COUNTRY, PfPR_rmean, EIR), by = c('eir' = 'EIR'))
 
 
 # plot
 ggplot(data = dat2) +
-  geom_line(aes(x = B, y = itn, color = eirs, group = eirs), size = 1, alpha = 0.5) +
+  geom_line(aes(x = B, y = itn, color = eir, group = eir), size = 1, alpha = 0.5) +
   labs(x = '$ USD', y = 'ITN usage', color = 'EIR',
        caption = '1 net = $1 USD, linear fit') +
   # facet_wrap(~COUNTRY, nrow = 1) +
@@ -110,7 +114,7 @@ ggplot(data = dat2) +
 ggsave('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/nloptr_EIR.pdf', height = 4, width = 6)
 
 
-dat3 <- dat2 %>% filter(B == 1000000) %>%
+dat3 <- dat2 %>% filter(B == 1100000) %>%
   mutate(start = B / sum(population)) %>%
   mutate(diff = itn - start)
 
@@ -140,11 +144,11 @@ ggplot() +
   geom_sf(data = st_as_sf(dat3), aes(fill = diff)) +
   theme_bw(base_size = 14) +
   # https://colorbrewer2.org/#type=diverging&scheme=RdBu&n=3
-  scale_fill_gradient2(low = '#67a9cf', mid = "white", high = '#ef8a62', midpoint = 0) +
+  scale_fill_gradient2(low = '#67a9cf', mid = "white", high = '#ef8a62', midpoint = 0, limits = c(-0.1, 0.1)) +
   scale_x_continuous(limits = c(-17.8, -11)) +
   scale_y_continuous(limits = c(12, 17)) +
   labs(x = '', y = '', fill = 'change in ITN use \nafter optimization',
-       caption = '1 M USD, weighted mixing, vs. a constant usage of 0.462') +
+       caption = '1.1 M USD, weighted mixing, vs. a constant usage of 0.508') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),
