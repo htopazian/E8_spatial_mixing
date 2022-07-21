@@ -1,3 +1,5 @@
+# creating a master file of parameters for Senegambia admin1s
+
 # libraries
 library(sf)
 library(tidyverse)
@@ -7,21 +9,22 @@ library(geodata)        # gadm
 library(wpgpDownloadR)  # worldpop devtools::install_github("wpgp/wpgpDownloadR")
 library(malariaAtlas)   # malaria atlas project
 library(raster)
+library(umbrella)       # devtools::install_github('https://github.com/mrc-ide/umbrella')
 
 
-
-# import GADM shapefiles -------------------------------------------------------
+# GADM shapefiles --------------------------------------------------------------
 
 # define countries by ISO
 # also downloadable at: https://geodata.ucdavis.edu/gadm/gadm4.0/pck/
 E8_SADC <- c('AGO','BWA','SWZ','MOZ','NAM','ZAF','ZMB','ZWE',
          'COM','COD','LSO','MDG','MWI','MUS','SYC','TZA')
 
-SSA <- c('KEN','UGA','COG','SSD','ETH','SOM','CAF','CMR','GAB','GNQ','RWA','BDI','NGA')
-
 Senegambia <- c('SEN','GMB')
 
 Senegambia_neighbors <- c('GNB','GIN','MRT','MLI')
+
+# other countries in SSA
+SSA <- c('KEN','UGA','COG','SSD','ETH','SOM','CAF','CMR','GAB','GNQ','RWA','BDI','NGA')
 
 
 # saves copy of gadm SpatVector as .rds in data folder
@@ -29,10 +32,10 @@ import_gadm <- function(ISO, level){
   geodata::gadm(country = ISO, level = level, path = './01_data/gadm', version="4.0")
 }
 
-map2(E8_SADC, 1, import_gadm)
-map2(SSA, 0, import_gadm)
-map2(Senegambia, 1, import_gadm)
-map2(Senegambia_neighbors, 0, import_gadm)
+map2(E8_SADC, 1, import_gadm)              # admin1
+map2(SSA, 0, import_gadm)                  # admin0
+map2(Senegambia, 1, import_gadm)           # admin1
+map2(Senegambia_neighbors, 0, import_gadm) # admin0
 
 # create a list of all countries
 files <- list.files(path = "./01_data/gadm", # Identify all .rds files in folder
@@ -40,9 +43,11 @@ files <- list.files(path = "./01_data/gadm", # Identify all .rds files in folder
 
 # unpack gadms
 unpack_gadm <- function(file){
+
   object <- readRDS(file) # read in object
   object <- terra::vect(object) # unpack SpatVector
   st_as_sf(object) # transform to sf object
+
 }
 
 countries <- map_dfr(files, unpack_gadm) # loop over each country
@@ -74,28 +79,29 @@ Senegambia_neighbors <- countries %>%
 # https://github.com/wpgp/wpgpDownloadR
 
 # download raster file and .csv of population counts
-wpgpGetCountryDataset(ISO3 = 'SEN', covariate = 'ppp_2000', destDir = './01_data/worldpop')
-wpgpGetCountryDataset(ISO3 = 'GMB', covariate = 'ppp_2000', destDir = './01_data/worldpop')
+wpgpGetCountryDataset(ISO3 = 'SEN', covariate = 'ppp_2020', destDir = './01_data/worldpop')
+wpgpGetCountryDataset(ISO3 = 'GMB', covariate = 'ppp_2020', destDir = './01_data/worldpop')
 
-wpgpGetPOPTable(ISO3 = 'SEN', year = 2000, destDir = './01_data/worldpop')
-wpgpGetPOPTable(ISO3 = 'GMB', year = 2000, destDir = './01_data/worldpop')
+wpgpGetPOPTable(ISO3 = 'SEN', year = 2020, destDir = './01_data/worldpop')
+wpgpGetPOPTable(ISO3 = 'GMB', year = 2020, destDir = './01_data/worldpop')
 
 # import rasters and merge
-SG_rast <- raster::merge(raster('./01_data/worldpop/sen_ppp_2000.tif'),
-                         raster('./01_data/worldpop/gmb_ppp_2000.tif'))
+SG_rast <- raster::merge(raster('./01_data/worldpop/sen_ppp_2020.tif'),
+                         raster('./01_data/worldpop/gmb_ppp_2020.tif'))
 
 # check res
 res(SG_rast)
 
-# downsize for ease of plotting
+# downsize resolution for ease of plotting
 SG_rast <- aggregate(SG_rast, fact=3); res(SG_rast)
 
 # extract population within each admin1
 pop <- raster::extract(SG_rast, Senegambia, exact = T)
 
 # sum for each polygon
-pop <- unlist(lapply(pop, function(x) if (!is.null(x)) sum(x, na.rm = TRUE) else NA )) %>%
-  as_tibble() %>% rename(wpop_pop = value)
+pop_2020 <- unlist(lapply(pop, function(x) if (!is.null(x)) sum(x, na.rm = TRUE) else NA )) %>%
+  as_tibble() %>%
+  rename(wpop_pop = value)
 
 
 # weighted polygon centroids
@@ -116,7 +122,7 @@ SG_rast <- data.frame(rasterToPoints(SG_rast, spatial = T))
 
 
 # MAP ITN ----------------------------------------------------------------------
-ITN <- read_csv('./01_data/map/00_ITN_table_Africa_admin1_2000-2020.csv') %>%
+ITN_2020 <- read_csv('./01_data/map/00_ITN_table_Africa_admin1_2000-2020.csv') %>%
   filter(ISO %in% c('SEN', 'GMB') & Year == 2020) %>%
   dplyr::select(ISO, Name_1, Mean_ITN_coverage_rate) %>%
   mutate(Name_1 = case_when(Name_1 == 'Thies' ~ 'Thiès',
@@ -132,7 +138,7 @@ ITN <- read_csv('./01_data/map/00_ITN_table_Africa_admin1_2000-2020.csv') %>%
 # https://malariaatlas.org/malaria-burden-data-download/
 # Annual mean of PF Parasite Rate
 pfpr <- read_csv('./01_data/map/00_PfPR_table_Global_admin1_2000-2019.csv') %>%
-  filter(Year == 2000 & ISO %in% c('SEN', 'GMB')) %>%
+  filter(Year == 2020 & ISO %in% c('SEN', 'GMB')) %>%
   dplyr::select(ISO, Name_0, Name_1, Pop, PfPR_rmean) %>% rename(map_pop = Pop) %>%
   mutate(Name_1 = case_when(Name_1 == 'Thies' ~ 'Thiès',
                             Name_1 == 'Sedhiou' ~ 'Sédhiou',
@@ -146,7 +152,8 @@ pfpr <- Senegambia %>% left_join(pfpr, by = c('ID_0' = 'ISO', 'NAME_1' = 'Name_1
 
 # calibrate pfprs to EIRs in odin
 # https://github.com/mrc-ide/cali/blob/main/R/calibrate.R
-source('./02_code/calibrate.R')
+# not incorporating ITNs yet ...
+source('./02_code/ICDMM/calibrate.R')
 
 # run over prevalence values for each admin1
 EIR <- map2_dfr(pfpr$PfPR_rmean, rep(365, nrow(pfpr)), PR_EIR)
@@ -176,8 +183,57 @@ centroids_combo <- rbind(
 )
 
 
-# save master dataset of variables
-master <- cbind(pfpr_eir, pop) %>%
+
+# Seasonality ------------------------------------------------------------------
+
+# specify time-range
+start_date <- "2020-01-01"
+end_date <- "2020-12-31"
+
+# extract
+daily_rain_raw <- umbrella::pull_daily_rainfall(sf = Senegambia,
+                                      start_date = start_date,
+                                      end_date = end_date)
+
+# process the raw data
+daily_rain  <- daily_rain_raw %>%
+  # Convert to long and format
+  pivot_longer(-c(ID_0:HASC_2),
+               names_to = "date",
+               values_to = "rainfall",
+               names_prefix = "X",
+               names_pattern = "(.*)_precipitation") %>%
+  mutate(date = as.Date(as.character(readr::parse_number(.data$date)), format = "%Y%m%d"),
+         year = lubridate::year(.data$date),
+         day_of_year = lubridate::yday(.data$date),
+         t = lubridate::yday(.data$date) / 365,
+         rainfall = as.numeric(rainfall)) %>%
+  # Replace missing data with 0
+  replace_na(replace = list(rainfall = 0)) %>%
+  # Remove any leap year addtional days
+  dplyr::filter(.data$day_of_year < 366)
+
+rain <- daily_rain %>%
+  group_by(COUNTRY, NAME_1) %>%
+  summarise(
+    data = list(data.frame(date, day_of_year, t, rainfall)),
+    model = list(umbrella::fit_fourier(data[[1]]$rainfall, data[[1]]$t)),
+    profile = list(umbrella::fourier_predict(model[[1]]$coefficients, t = 1:365 / 365, floor = model[[1]]$floor))
+  )
+
+# extract model estimates
+seasonality <- map_dfr(.x = 1:nrow(rain),
+                       function(x){
+                          tibble(list(rain[["model"]][[x]][["estimate"]]))
+                         })
+
+seasonality <- cbind(Senegambia$COUNTRY, Senegambia$NAME_1, seasonality)
+
+colnames(seasonality) <- c('COUNTRY', 'NAME_1', 'seasonality')
+
+
+# Save master dataset ----------------------------------------------------------
+master <- cbind(pfpr_eir, pop_2020) %>%
   rename(EIR = root) %>%
   dplyr::select(ID_0, COUNTRY, NAME_1, VARNAME_1, map_pop, wpop_pop,
                 PfPR_rmean, EIR, geometry)
@@ -185,7 +241,9 @@ master <- cbind(master,
                 weighted_centroids %>% rename(w_cent_geometry = geometry),
                 centroids %>% dplyr::select(geometry) %>% rename(cent_geometry = geometry))
 
-master <- master %>% left_join(ITN, by = c('ID_0' = 'ISO', 'NAME_1' = 'Name_1'))
+master <- master %>% left_join(ITN_2020, by = c('ID_0' = 'ISO', 'NAME_1' = 'Name_1'))
+
+master <- master %>% left_join(seasonality, by = c('COUNTRY', 'NAME_1'))
 
 # save master dataframe in Github and on M drive
 saveRDS(master, './03_output/Senegambia_master.rds') # save
