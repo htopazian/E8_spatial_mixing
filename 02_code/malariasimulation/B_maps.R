@@ -265,6 +265,14 @@ master <- E8_sf %>%
 master %>% filter(is.na(Mean_ITN_coverage_rate)) # 6 missing, all in BWA
 master %>% filter(is.na(PfPR_rmean)) # 1 missing in MOZ
 
+# correct missings
+master <- master %>%
+  mutate(PfPR_rmean = ifelse(NAME_1 == 'Maputo City',
+                             master[master$NAME_1 == 'Maputo', ]$PfPR_rmean,
+                             PfPR_rmean),
+         Mean_ITN_coverage_rate = ifelse(is.na(Mean_ITN_coverage_rate),
+                                         0,
+                                         Mean_ITN_coverage_rate))
 
 # save master dataframe in Github and on M drive
 saveRDS(master, './03_output/E8_master.rds')
@@ -272,7 +280,7 @@ saveRDS(master, 'M:/Hillary/E8_spatial_mixing/E8_master.rds')
 
 
 # E8 map -----------------------------------------------------------------------
-countries <- readRDS(countries, './03_output/E8_master.rds')
+# countries <- readRDS('./03_output/E8_master.rds')
 weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
 E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
 
@@ -440,8 +448,6 @@ totals <- (Nj ^ t) * (1 + (d / exp(log_p)))^(-a)
 # standardize so that each location sums to 1
 Pij <- totals / rowSums(totals)
 
-
-
 # add in duration of travel
 f <- as_tibble(d) %>% # convert distance matrix to long tibble
   pivot_longer(cols = everything(), values_to = 'Distance', names_to = NULL)
@@ -449,7 +455,8 @@ f <- as_tibble(d) %>% # convert distance matrix to long tibble
 pred <- predict(model, newdata = f) # predict duration of travel with Marshall et al. model fits
 
 pred_dat <- f %>% cbind(pred) %>% # bind predications to data
-  mutate(pred = ifelse(Distance == 0, NA, pred)) # remove pred for admin1 with itself
+  mutate(pred = ifelse(Distance == 0, NA, pred), # remove pred for admin1 with itself
+         pred = ifelse(pred <0, 0, pred))        # turn negative durations to 0
 
 summary(pred_dat$pred) # examine predictions
 
@@ -462,6 +469,7 @@ rsum <- 365 - rowSums(pred_mat, na.rm = T)
 I <- diag(1, ncol = nrow(data), nrow = nrow(data))
 pred_mat[I == 1] <- rsum
 
+
 # multiply frequency of travel by probability of travel to each destination
 # diagonals should always be the majority of the row (staying within own population)
 Pij_f <- pred_mat / rowSums(pred_mat)
@@ -469,5 +477,56 @@ Pij_f <- pred_mat / rowSums(pred_mat)
 saveRDS(Pij_f, 'M:/Hillary/E8_spatial_mixing/E8_mixing_W.rds')
 
 
+# map with mixing connections ----
+setwd('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/')
+data <- readRDS('./03_output/E8_master.rds')
+matrix <- readRDS('M:/Hillary/E8_spatial_mixing/E8_mixing_W.rds')
 
+test <- as.data.frame(matrix)
+test <- test %>% pivot_longer(cols = everything(), names_to = 'destination', values_to = 'flow')
+
+test$country_origin <- unlist(lapply(master$ID_0, function(x){rep(x, nrow(master))}))
+test$admin1_origin <- unlist(lapply(master$NAME_1, function(x){rep(x, nrow(master))}))
+test$country_destination <- rep(master$ID_0, nrow(master))
+test$admin1_destination <- rep(master$NAME_1, nrow(master))
+
+countries <- readRDS('./03_output/countries.rds')
+weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
+E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
+
+test2 <- test %>%
+  left_join(weighted_centroids, by = c('country_origin' = 'ID_0', 'admin1_origin' = 'NAME_1')) %>%
+  rename(centroid_origin = w_cent_geometry) %>%
+  left_join(weighted_centroids, by = c('country_destination' = 'ID_0', 'admin1_destination' = 'NAME_1')) %>%
+  rename(centroid_destination = w_cent_geometry) %>%
+  mutate(long_origin = unlist(map(centroid_origin, 1)),
+         lat_origin = unlist(map(centroid_origin, 2)),
+         long_destination = unlist(map(centroid_destination, 1)),
+         lat_destination = unlist(map(centroid_destination, 2))) %>%
+  mutate(flow_f = case_when(flow == 0 ~ 0,
+                            flow > 0 & flow <= 0.01 ~ 0.01,
+                            flow > 0.01 & flow <= 0.1 ~ 0.1,
+                            flow > 0.1 ~ 0.9),
+         flow_f = factor(flow_f)) %>%
+  filter(flow > 0 & flow < 0.9)
+
+summary(test2$flow)
+
+# base plot
+ggplot() +
+  geom_sf(data = countries %>% filter(ID_0 %in% SSA), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
+  geom_sf(data = countries %>% filter(ID_0 %in% SADC), aes(fill = 'SADC'), color = "cornsilk3", size = 0.01) +
+  geom_sf(data = st_union(countries %>% filter(ID_0 %in% E8)), aes(fill = 'E8'), color = "cornsilk3", size = 0.01) +
+  geom_segment(data = test2, aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue")+
+  scale_fill_manual(values = c("#55C667FF", "#95D840FF")) +
+  scale_alpha_manual(values = c(0.01, 0.1, 1), range(0.01, 0.01)) +
+  theme_bw(base_size = 14) +
+  coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6)) +
+  labs(x = '', y = '', color = '', fill = '') +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.background = element_rect(fill = "#daeff8", color = NA))
 

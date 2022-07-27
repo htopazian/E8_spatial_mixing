@@ -8,11 +8,11 @@ options(didehpc.cluster = "fi--didemrchnb",
 
 # transfer the new malariasimulation folder manually to contexts or delete and re-install using conan
 # remotes::install_github('mrc-ide/malariasimulation@dev', force=T)
-src <- conan::conan_sources(c("github::mrc-ide/malariasimulation@feat/metapopulation"))
+src <- conan::conan_sources(c("https://github.com/mrc-ide/malariasimulation@dev", "https://github.com/mrc-ide/cali"))
 
 ctx <- context::context_save(path = "Q:/contexts",
                              sources = c('M:/Hillary/E8_spatial_mixing/function_PR_EIR_match.R'),
-                             packages = c("dplyr", "malariasimulation"),
+                             packages = c("dplyr", "malariasimulation", "cali"),
                              package_sources = src)
 
 share <- didehpc::path_mapping("malaria", "M:", "//fi--didef3.dide.ic.ac.uk/malaria", "M:")
@@ -22,7 +22,7 @@ config <- didehpc::didehpc_config(shares = share,
                                   cluster = "fi--didemrchnb", # fi--dideclusthn OR fi--didemrchnb
                                   parallel = FALSE)
 
-obj <- didehpc::queue_didehpc(ctx, config = config) # check for latest v. of packages
+obj <- didehpc::queue_didehpc(ctx, config = config)
 
 
 # Set up your job --------------------------------------------------------------
@@ -31,13 +31,16 @@ library(tidyverse)
 library(malariasimulation)
 
 # read in master Senegambia dataframe
-master <- readRDS('M:/Hillary/E8_spatial_mixing/Senegambia_master.rds')
+master <- readRDS('M:/Hillary/E8_spatial_mixing/E8_master.rds')
 
+# extra parameters
 year <- 365
 month <- year/12
-
-# run time
+human_population <- 10000
 sim_length <- 9 * year
+
+
+# NOTE!!! Need to update species compositions, treatment, etc.
 
 # function to get parameters for baseline scenarios
 getparams_calibrate <- function(x){
@@ -49,7 +52,7 @@ getparams_calibrate <- function(x){
 
   # get starting parameters ----------
   params <- get_parameters(list(
-    human_population = 10000,
+    human_population = human_population,
     model_seasonality = TRUE,
     # rainfall fourier parameters
     # seasonal profiles: c(g0, g[1], g[2], g[3], h[1], h[2], h[3])
@@ -61,6 +64,8 @@ getparams_calibrate <- function(x){
   # outcome definitions ----------
   params$prevalence_rendering_min_ages = 2 * year
   params$prevalence_rendering_max_ages = 10 * year
+  params$clinical_incidence_rendering_min_ages = c(0, 0)*year
+  params$clinical_incidence_rendering_max_ages = c(5, 200)*year
 
   # demography ----------
   flat_demog <- read.table('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/01_data/Flat_demog.txt') # from mlgts
@@ -72,7 +77,7 @@ getparams_calibrate <- function(x){
     agegroups = ages,
     timesteps = 1,
     deathrates = matrix(deathrates, nrow = 1),
-    birthrates = find_birthrates(population, ages, deathrates)
+    birthrates = find_birthrates(human_population, ages, deathrates)
   )
 
   # vectors ----------
@@ -127,19 +132,18 @@ getparams_calibrate <- function(x){
     timesteps = c(1),
     coverages = c(0.4)
   )
-#
-#   parameters = data.frame(params = c(0), pfpr = c(0))
-#   parameters$params <- list(params)
-#   parameters$pfpr <- p$PfPR_rmean
-#   parameters$COUNTRY <- p$COUNTRY
-#   parameters$NAME_1 <- p$NAME_1
 
-  return(params)
+  parameters <- data.frame(params = c(0), pfpr = c(0))
+  parameters$params <- list(params)
+  parameters$pfpr <- p$PfPR_rmean
+  parameters$COUNTRY <- p$COUNTRY
+  parameters$NAME_1 <- p$NAME_1
+
+  return(parameters)
 
 }
 
-
-parameters <- lapply(1:nrow(master), getparams_calibrate)
+parameters <- map_dfr(1:nrow(master), getparams_calibrate)
 
 # save
 saveRDS(parameters, 'M:/Hillary/E8_spatial_mixing/calibration_parameters.rds')
@@ -147,6 +151,30 @@ saveRDS(parameters, 'M:/Hillary/E8_spatial_mixing/calibration_parameters.rds')
 
 
 # Run tasks -------------------------------------------------------------------
-# submit all remaining tasks
-t <- obj$enqueue_bulk('W', PR_EIR_match)
+# < submit isolated calibrations ####
+# remove ones that have already been run
+index <- readRDS('M:/Hillary/E8_spatial_mixing/calibration_parameters.rds') %>%
+  mutate(f = paste0('M:/Hillary/E8_spatial_mixing/PR_EIR_match/PR_EIR_admin1_match', '_', COUNTRY, '_', NAME_1, '.rds'),
+         index = row_number(),
+         exist = case_when(file.exists(f) ~ 1, !file.exists(f) ~ 0)) %>%
+  filter(exist == 0) %>%
+  select(index)
+
+t <- obj$enqueue_bulk(index[1:91,], PR_EIR_match)
+
+# read in results
+files <- list.files(path = "M:/Hillary/E8_spatial_mixing/PR_EIR_match", pattern = "PR_EIR_admin1_match_", full.names = TRUE)
+dat_list <- lapply(files, function (x) readRDS(x))
+
+# concatenate
+match <-  do.call("rbind", dat_list) %>% as_tibble()
+summary(match$starting_EIR)
+
+# save EIR estimates
+saveRDS(match, "M:/Hillary/E8_spatial_mixing/EIRestimates.rds")
+
+
+
+# < submit metapopulation calibration ####
+t <- obj$enqueue_bulk('W', PR_EIR_match_metapopulation)
 
