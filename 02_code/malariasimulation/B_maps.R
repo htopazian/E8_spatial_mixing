@@ -32,19 +32,19 @@ import_gadm <- function(ISO, level){
 }
 
 map2(E8, 1, import_gadm)    # admin1
-map2(SADC, 1, import_gadm)  # admin1
+map2(SADC, 0, import_gadm)  # admin1
 map2(SSA, 0, import_gadm)   # admin0
 
 
 # create a list of all countries
 # E8 and SADC admin1s
-admin1 <- lapply(c(E8, SADC), function(x){
+admin1 <- lapply(c(E8), function(x){
     list.files(path = "./01_data/gadm",
                pattern = paste0("*", x , "_1_pk.rds"), full.names = TRUE)
   }) %>% unlist
 
 # SSA countries admin0s
-admin0 <- lapply(c(SSA), function(x){
+admin0 <- lapply(c(SSA, SADC), function(x){
   list.files(path = "./01_data/gadm",
              pattern = paste0("*", x , "_0_pk.rds"), full.names = TRUE)
 }) %>% unlist
@@ -99,8 +99,9 @@ res(E8_rast)
 saveRDS(E8_rast, './03_output/E8_rast.rds') # save
 # E8_rast <- readRDS('./03_output/E8_rast.rds')
 
+
 # downsize resolution for ease of plotting
-E8_rast <- raster::aggregate(E8_rast, fact = 6); res(E8_rast)
+E8_rast <- raster::aggregate(E8_rast, fact = 100); res(E8_rast)
 
 # extract population within each admin1
 pop <- raster::extract(E8_rast,
@@ -118,13 +119,8 @@ colnames(pop_2020) <- c('ID_0', 'NAME_1', 'wpop_pop')
 
 
 # change to dataframe to use with ggplot()
-E8_rast <- data.frame(rasterToPoints(E8_rast, spatial = T))
-# downsize resolution for ease of plotting
-E8_rast <- readRDS('./03_output/E8_rast.rds')
-E8_rast_reduced <- raster::aggregate(E8_rast, fact = 100); res(E8_rast)
-
-# change to dataframe to use with ggplot()
-E8_rast_reduced <- data.frame(rasterToPoints(E8_rast_reduced, spatial = T))
+E8_rast_reduced <- data.frame(rasterToPoints(E8_rast, spatial = T))
+saveRDS(E8_rast_reduced, './03_output/E8_rast_reduced.rds') # save
 
 
 # MAP ITN ----------------------------------------------------------------------
@@ -279,57 +275,6 @@ saveRDS(master, './03_output/E8_master.rds')
 saveRDS(master, 'M:/Hillary/E8_spatial_mixing/E8_master.rds')
 
 
-# E8 map -----------------------------------------------------------------------
-# countries <- readRDS('./03_output/E8_master.rds')
-weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
-E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
-
-# base plot
-baseplot <- ggplot() +
-  geom_sf(data = countries %>% filter(ID_0 %in% SSA), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
-  geom_sf(data = countries %>% filter(ID_0 %in% SADC), aes(fill = 'SADC'), color = "cornsilk3", size = 0.01) +
-  geom_sf(data = E8_sf, aes(fill = 'E8'), color = "cornsilk3", size = 0.01) +
-  scale_fill_manual(values = c("#55C667FF", "#95D840FF")) +
-  theme_bw(base_size = 14) +
-  coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6)) +
-  labs(x = '', y = '', color = '', fill = '') +
-  theme(panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        axis.ticks = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.background = element_rect(fill = "#daeff8", color = NA))
-
-# plot population
-# choose points for population plotting (alpha breaks)
-summary(E8_rast_reduced$layer)
-# create point for legend
-x <- c(1); y <- c(1); point <- tibble(x, y)
-
-A <- baseplot +
-  geom_tile(data = E8_rast_reduced, aes(x = x, y = y, alpha = layer), fill = "darkgreen", show.legend = F) +
-  geom_point(data = point, aes(x = x, y = y, color = "population"), size = 0.5) +
-  scale_color_manual(values = c("darkgreen")) +
-  scale_alpha_continuous(range = c(0, 420), breaks = c(0, 0.0038, 0.0038, 0.1216, 420))
-
-# plot weighted centroids
-B <- baseplot +
-  geom_sf(data = weighted_centroids, aes(color = 'weighted centroids'), shape = 4, size = 1) +
-  scale_color_manual(values = c('blue')) +
-  coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6))
-
-
-# consolidate plots
-A + B + plot_layout(guides = "collect", nrow = 1) +
-  plot_annotation(tag_levels = 'A')
-
-ggsave('./03_output/E8_map.pdf', width = 12, height = 6)
-
-# ideas:
-# - put in country borders
-# - group population and centroids plot
-
-
 # Trip duration ----------------------------------------------------------------
 # https://malariajournal.biomedcentral.com/articles/10.1186/s12936-016-1252-3#MOESM2
 # 12936_2016_1252_MOESM2_ESM.xlsx Additional file 2, Marshall et al. 2016
@@ -477,8 +422,47 @@ Pij_f <- pred_mat / rowSums(pred_mat)
 saveRDS(Pij_f, 'M:/Hillary/E8_spatial_mixing/E8_mixing_W.rds')
 
 
-# map with mixing connections ----
-setwd('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/')
+# E8 map -----------------------------------------------------------------------
+countries <- readRDS('./03_output/countries.rds')
+weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
+E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
+
+# base plot
+baseplot <- ggplot() +
+  geom_sf(data = countries %>% filter(ID_0 %in% SSA), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
+  geom_sf(data = countries %>% filter(ID_0 %in% SADC), aes(fill = 'SADC'), color = "cornsilk3", size = 0.01, alpha = 0.6) +
+  geom_sf(data = E8_sf, aes(fill = 'E8'), color = "cornsilk3", alpha = 0.6, size = 0.01) +
+  scale_fill_manual(values = c("#55C667FF", "#95D840FF")) +
+  theme_bw(base_size = 14) +
+  coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6)) +
+  labs(x = '', y = '', color = '', fill = '') +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.background = element_rect(fill = "#daeff8", color = NA))
+
+# plot population
+# choose points for population plotting (alpha breaks)
+summary(E8_rast_reduced$layer)
+# create point for legend
+x <- c(1); y <- c(1); point <- tibble(x, y)
+
+A <- baseplot +
+  geom_tile(data = E8_rast_reduced, aes(x = x, y = y, alpha = layer), fill = "darkgreen", show.legend = F) +
+  geom_point(data = point, aes(x = x, y = y, color = "population"), size = 0.5) +
+  scale_color_manual(values = c("darkgreen")) +
+  scale_alpha_continuous(range = c(0, 420), breaks = c(0, 0.0038, 0.0038, 0.1216, 420))
+
+# plot weighted centroids
+B <- baseplot +
+  geom_sf(data = weighted_centroids, aes(color = 'weighted centroids'), shape = 4, size = 1) +
+  scale_color_manual(values = c('blue')) +
+  coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6))
+
+
+# plot flow between centroids
 data <- readRDS('./03_output/E8_master.rds')
 matrix <- readRDS('M:/Hillary/E8_spatial_mixing/E8_mixing_W.rds')
 
@@ -490,10 +474,6 @@ test$admin1_origin <- unlist(lapply(master$NAME_1, function(x){rep(x, nrow(maste
 test$country_destination <- rep(master$ID_0, nrow(master))
 test$admin1_destination <- rep(master$NAME_1, nrow(master))
 
-countries <- readRDS('./03_output/countries.rds')
-weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
-E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
-
 test2 <- test %>%
   left_join(weighted_centroids, by = c('country_origin' = 'ID_0', 'admin1_origin' = 'NAME_1')) %>%
   rename(centroid_origin = w_cent_geometry) %>%
@@ -503,26 +483,24 @@ test2 <- test %>%
          lat_origin = unlist(map(centroid_origin, 2)),
          long_destination = unlist(map(centroid_destination, 1)),
          lat_destination = unlist(map(centroid_destination, 2))) %>%
-  mutate(flow_f = case_when(flow == 0 ~ 0,
-                            flow > 0 & flow <= 0.01 ~ 0.01,
-                            flow > 0.01 & flow <= 0.1 ~ 0.1,
-                            flow > 0.1 ~ 0.9),
+  mutate(flow_f = case_when(flow == 0 ~ 'none',
+                            flow > 0 & flow <= 0.01 ~ 'less movement',
+                            flow > 0.01 & flow <= 0.1 ~ 'more movement',
+                            flow > 0.1 ~ 'max movement'),
          flow_f = factor(flow_f)) %>%
   filter(flow > 0 & flow < 0.9)
 
 summary(test2$flow)
 
-# base plot
-ggplot() +
-  geom_sf(data = countries %>% filter(ID_0 %in% SSA), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
-  geom_sf(data = countries %>% filter(ID_0 %in% SADC), aes(fill = 'SADC'), color = "cornsilk3", size = 0.01) +
-  geom_sf(data = st_union(countries %>% filter(ID_0 %in% E8)), aes(fill = 'E8'), color = "cornsilk3", size = 0.01) +
-  geom_segment(data = test2, aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue")+
-  scale_fill_manual(values = c("#55C667FF", "#95D840FF")) +
-  scale_alpha_manual(values = c(0.01, 0.1, 1), range(0.01, 0.01)) +
+C <- ggplot() +
+  geom_sf(data = countries %>% filter(ID_0 %in% c(SSA, SADC, E8)), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
+  geom_sf(data = st_union(countries %>% filter(ID_0 %in% SADC)), color = "#95D840FF", fill = NA, size = 0.5) +
+  geom_sf(data = st_union(countries %>% filter(ID_0 %in% E8)), color = "#55C667FF", fill = NA, size = 0.5) +
+  geom_segment(data = test2, aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue") +
+  scale_alpha_manual(values = c(0.05, 0.1), name = '', labels = c('less movement', 'more movement')) +
   theme_bw(base_size = 14) +
   coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6)) +
-  labs(x = '', y = '', color = '', fill = '') +
+  labs(x = '', y = '', color = '', fill = '', alpha = '') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),
@@ -530,3 +508,9 @@ ggplot() +
         axis.text.y = element_blank(),
         panel.background = element_rect(fill = "#daeff8", color = NA))
 
+
+# consolidate plots
+mapplot <- A + B + C + plot_layout(guides = "collect", nrow = 1) +
+  plot_annotation(tag_levels = 'A')
+
+ggsave('./03_output/E8_map.pdf', plot = mapplot, width = 12, height = 6)

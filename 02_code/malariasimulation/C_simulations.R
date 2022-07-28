@@ -35,12 +35,15 @@ t <- obj$enqueue_bulk('I', metapop_sims)
 
 
 # Read in results --------------------------------------------------------------
-output <- readRDS('M:/Hillary/E8_spatial_mixing/metapop_run_I.rds')
+output1 <- readRDS('M:/Hillary/E8_spatial_mixing/metapop_run_I.rds') %>% mutate(model = 'isolated')
+output2 <- readRDS('M:/Hillary/E8_spatial_mixing/metapop_run_W.rds') %>% mutate(model = 'mixed')
+
 master <- readRDS('M:/Hillary/E8_spatial_mixing/E8_master.rds') %>% st_drop_geometry()
 
-output2 <- output %>%
+# combine results
+output <- output1 %>% rbind(output2) %>%
   filter(year %in% c(7, 8, 9)) %>%
-  group_by(country, admin1) %>%
+  group_by(country, admin1, model) %>%
   summarize(pfpr2_10 = mean(pfpr2_10)) %>%
   left_join(master %>% dplyr::select(COUNTRY, NAME_1, PfPR_rmean), by = c("country" = "COUNTRY", "admin1" = "NAME_1")) %>%
   ungroup() %>%
@@ -48,23 +51,30 @@ output2 <- output %>%
          PRdiff = PfPR_rmean - pfpr2_10,
          index = row_number())
 
-summary(output2$PRdiff)
 
-ggplot(data = output2, aes(x = index, y = PRdiff)) +
+# plot difference between MAP PR vs. model output PR
+ggplot(data = output, aes(x = index, y = PRdiff)) +
   geom_hline(aes(yintercept = 0), alpha = 0.3) +
-  geom_point(aes(color = country), show.legend = F) +
-  theme_classic()
+  geom_point(aes(color = model), show.legend = T) +
+  labs(x = '',
+       y = 'difference in PfPR 2-10',
+       title = 'Target PfPR 2-10 vs. calibrated model PfPR 2-10',
+       color = '') +
+  theme_classic() +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank())
+
+ggsave('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/calibrate1.pdf', width = 5, height = 3)
 
 
-summary(output2$PfPR_rmean)
-summary(output2$pfpr2_10)
-
-ggplot(data = output2, aes(x = PfPR_rmean, y = pfpr2_10)) +
+# plot MAP PR vs. model output PR
+ggplot(data = output, aes(x = PfPR_rmean, y = pfpr2_10)) +
   geom_abline(aes(intercept = 0, slope = 1), alpha = 0.3) +
-  geom_point(aes(color = country), alpha = 0.5, show.legend = T) +
+  geom_point(aes(color = country), alpha = 0.7, show.legend = T) +
+  facet_wrap(~model) +
   labs(x = 'MAP calibration PfPR 2-10',
        y = 'malariasimulation PfPR 2-10',
        color = '') +
   theme_classic()
 
+ggsave('C:/Users/htopazia/OneDrive - Imperial College London/Github/E8_spatial_mixing/03_output/calibrate2.pdf', width = 5, height = 3)
 
