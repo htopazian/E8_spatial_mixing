@@ -424,8 +424,10 @@ saveRDS(Pij_f, 'M:/Hillary/E8_spatial_mixing/E8_mixing_W.rds')
 
 # E8 map -----------------------------------------------------------------------
 countries <- readRDS('./03_output/countries.rds')
+E8_sf <- countries %>% filter(ID_0 %in% E8)
 weighted_centroids <- readRDS('./03_output/E8_weighted_centroids.rds') %>% st_as_sf(crs = crs(countries))
 E8_rast_reduced <- readRDS('./03_output/E8_rast_reduced.rds')
+master <- readRDS('./03_output/E8_master.rds')
 
 # base plot
 baseplot <- ggplot() +
@@ -484,29 +486,33 @@ test2 <- test %>%
          long_destination = unlist(map(centroid_destination, 1)),
          lat_destination = unlist(map(centroid_destination, 2))) %>%
   mutate(flow_f = case_when(flow == 0 ~ 'none',
-                            flow > 0 & flow <= 0.01 ~ 'less movement',
-                            flow > 0.01 & flow <= 0.1 ~ 'more movement',
+                            flow > 0 & flow <= 0.001 ~ 'less movement',
+                            flow > 0.001 & flow <= 0.1 ~ 'more movement',
                             flow > 0.1 ~ 'max movement'),
          flow_f = factor(flow_f)) %>%
   filter(flow > 0 & flow < 0.9)
 
 summary(test2$flow)
+table(test2$flow_f)
 
 C <- ggplot() +
   geom_sf(data = countries %>% filter(ID_0 %in% c(SSA, SADC, E8)), fill = "cornsilk2", color = "cornsilk3", size = 0.01) +
   geom_sf(data = st_union(countries %>% filter(ID_0 %in% SADC)), color = "#95D840FF", fill = NA, size = 0.5) +
   geom_sf(data = st_union(countries %>% filter(ID_0 %in% E8)), color = "#55C667FF", fill = NA, size = 0.5) +
-  geom_segment(data = test2, aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue") +
-  scale_alpha_manual(values = c(0.05, 0.1), name = '', labels = c('less movement', 'more movement')) +
+  geom_segment(data = test2 %>% filter(flow_f == 'more movement'), aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue") +
+  geom_segment(data = test2 %>% filter(flow_f == 'less movement'), aes(x = long_origin, y = lat_origin, xend = long_destination, yend = lat_destination, alpha = flow_f), size = 0.1, color =  "blue") +
+  scale_alpha_manual(values = c(0.01, 0.05), name = '', labels = c('less movement', 'more movement')) +
   theme_bw(base_size = 14) +
   coord_sf(xlim = c(10, 51.5), ylim = c(-35, 6)) +
-  labs(x = '', y = '', color = '', fill = '', alpha = '') +
+  labs(x = '', y = '', color = '', fill = '') +
   theme(panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         axis.ticks = element_blank(),
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         panel.background = element_rect(fill = "#daeff8", color = NA))
+beepr::beep(1)
+ggsave('./03_output/flow.pdf', plot = C, width = 6, height = 6)
 
 
 # consolidate plots
